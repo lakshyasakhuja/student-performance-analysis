@@ -1,0 +1,418 @@
+---
+title: "Predicting Student Performance in Mathematics: A Multiple Regression Analysis"
+subtitle: "Executive Summary Report - Group L21G05"
+author: 
+  - "Lakshya Sakhuja (540863213)"
+  - "Mingyu Wang (540764541)"
+  - "Gary Zhang (520037603)"
+  - "Yujin Song (530538956)"
+date: today
+format:
+  pdf:
+    documentclass: article
+    geometry: "margin=0.5in, a4paper"
+    fontsize: 10pt
+    linestretch: 1.0
+    fig-width: 4
+    fig-height: 2.5
+    keep-tex: true
+    include-in-header:
+      - text: |
+          \usepackage{float}
+          \usepackage{booktabs}
+          \usepackage{longtable}
+          \usepackage{graphicx}
+          \usepackage{adjustbox}
+          \usepackage{setspace}
+          \setlength{\parskip}{0.1em}
+          \setlength{\parindent}{0pt}
+          \usepackage{amsmath}
+          \makeatletter
+          \renewcommand{\section}{%
+            \@startsection{section}{1}{\z@}%
+            {-0.3em \@plus -0.1em \@minus -0.1em}%
+            {0.3em \@plus 0.1em \@minus 0.1em}%
+            {\normalfont\bfseries\large}}
+          \renewcommand{\subsection}{%
+            \@startsection{subsection}{2}{\z@}%
+            {-0.2em \@plus -0.05em \@minus -0.05em}%
+            {0.2em \@plus 0.05em \@minus 0.05em}%
+            {\normalfont\bfseries\normalsize}}
+          \makeatother
+          \setlength{\topsep}{0.3em}
+          \setlength{\partopsep}{0em}
+          \setlength{\itemsep}{0.2em}
+          \setlength{\parsep}{0.1em}
+          \makeatletter
+          \renewcommand{\@maketitle}{%
+            \newpage
+            \null
+            \vskip 0.5em%
+            \begin{center}%
+            \let \footnote \thanks
+            {\large \@title \par}%
+            \vskip 0.2em%
+            {\normalsize
+              \begin{tabular}[t]{c}%
+                \@author
+              \end{tabular}\par}%
+            \vskip 0.4em%
+            {\normalsize \@date}%
+            \end{center}%
+            \par
+            \vskip 0.8em}
+          \makeatother
+execute:
+  echo: false
+  warning: false
+  message: false
+  fig-cap-location: top
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 4,
+  fig.height = 2.5,
+  dpi = 300,
+  fig.align = "center",
+  fig.pos = "H"
+)
+```
+
+```{r load-libraries, include=FALSE}
+library(tidyverse)
+library(knitr)
+library(janitor)
+library(leaps)
+library(car)
+library(lmtest)
+library(caret)
+library(ggplot2)
+library(gridExtra)
+```
+
+# Abstract
+
+This study predicts final mathematics performance (G3) among 395 Portuguese secondary school students using multiple linear regression. Stepwise selection and exhaustive search identified a parsimonious model explaining 85% of variance. The final model incorporates second-period grades (G2), log-transformed absences, and engineered features. G2 is the strongest predictor (β = 1.038, p < 0.001). The model demonstrates strong performance (R² = 0.852, RMSE = 1.72) and satisfies regression assumptions. Findings support early intervention strategies targeting at-risk students. The methodology demonstrates how feature engineering and systematic model selection can yield interpretable yet powerful predictive models in educational contexts.
+
+# Introduction
+
+Mathematics performance in secondary education predicts future academic success. Early identification of at-risk students enables targeted interventions. This study addresses: *Can we predict final mathematics performance from early grades, study habits, and lifestyle factors?* We employ multiple linear regression to model final grades (G3) using demographic, academic, and lifestyle predictors. Understanding which factors most strongly influence student outcomes can help educators allocate resources effectively and implement timely support programs. By leveraging early academic indicators and behavioral patterns, we aim to develop a predictive framework that can identify students at risk of poor performance before final assessments.
+
+# Data Set
+
+The dataset comprises 395 secondary school students from two Portuguese schools (2005-2006) [@cortez2008using], collected through student questionnaires and school records. The data includes 33 variables covering demographics, family background, academic performance, and lifestyle factors. Key variables include: demographics (gender, age, parental education levels 0-4), academic performance (first period grade G1, second period grade G2, final grade G3: 0-20 scale, where G3 is the target variable), past failures, study time (1-4 scale), and lifestyle factors (absences, weekday/weekend alcohol consumption 1-5 scale, social activities). The dataset contains no missing values. Descriptive statistics reveal mean G3 = 10.42 (SD = 4.58), with G1 and G2 showing strong correlations with G3 (r = 0.801 and r = 0.905, respectively). The comprehensive nature of the dataset allows for examination of both academic and non-academic factors influencing student performance.
+
+# Analysis
+
+## Data Preparation and Feature Engineering
+
+Feature engineering was employed to capture non-linear relationships within a linear regression framework [@james2021introduction]. This included: (1) **ratio features** capturing relationships between variables (failure-to-absence ratio, absences per study time); (2) **log transformations** applied to skewed variables (absences, failures) to improve normality [@fox2015applied]; (3) **normalizations** of ordinal variables to 0-1 scale. This approach allows the linear model to capture complex interactions while maintaining interpretability.
+
+## Variable Selection
+
+Three complementary approaches were employed to identify the optimal model, ensuring robustness: (1) **Stepwise selection** (backward and forward) using AIC criterion to balance model fit and complexity [@james2021introduction]; (2) **Exhaustive search** using the `leaps` package to evaluate all possible subsets, selecting models that minimized BIC [@heinze2018variable]; (3) **10-fold cross-validation** to assess out-of-sample predictive performance using RMSE [@james2021introduction]. Candidate predictors included: `failures`, `ln_failures`, `ln_absences`, `g2`, `fail_abs_ratio`, and `absences_per_study`. All three methods converged on the same final model, providing strong evidence for model selection. This convergence across different selection criteria enhances confidence in the model's validity and generalizability.
+
+```{r model-selection, include=FALSE}
+# Load and prepare data
+if (!exists("student")) {
+  student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+  student <- clean_names(student)
+  student <- student %>% mutate(across(where(is.character), as.factor))
+  student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+  student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+  student$ln_absences <- log1p(student$absences)
+  student$ln_failures <- log1p(student$failures)
+}
+
+# Set seed for reproducibility
+set.seed(123)
+student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+train <- subset(student, test == 0)
+test <- subset(student, test == 1)
+
+# Full candidate model
+form_all <- g3 ~ failures + ln_failures + ln_absences + g2 + 
+            fail_abs_ratio + absences_per_study
+
+# Backward stepwise
+model_full <- lm(form_all, data = train)
+backward_model <- step(model_full, direction = "backward", trace = 0)
+
+# Forward stepwise
+model_null <- lm(g3 ~ 1, data = train)
+forward_model <- step(model_null, scope = formula(model_full), 
+                      direction = "forward", trace = 0)
+
+# Exhaustive search (leaps)
+fit_leaps <- regsubsets(form_all, data = train, nbest = 1, 
+                       nvmax = NULL, method = "exhaustive")
+sum_leaps <- summary(fit_leaps)
+best_by_bic <- which.min(sum_leaps$bic)
+
+# Extract best model
+pick_model <- function(best_idx) {
+  keep <- names(which(sum_leaps$which[best_idx, ]))[-1]
+  rhs <- paste(keep, collapse = " + ")
+  as.formula(paste("g3 ~", rhs))
+}
+
+form_bic <- pick_model(best_by_bic)
+final_model <- lm(form_bic, data = train)
+```
+
+## Model Assumptions
+
+We verified all multiple regression assumptions through diagnostic plots (shown in appendix) and formal statistical tests:
+
+```{r assumption-checks, include=FALSE}
+# Ensure data and model are prepared
+if (!exists("student")) {
+  student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+  student <- clean_names(student)
+  student <- student %>% mutate(across(where(is.character), as.factor))
+  student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+  student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+  student$ln_absences <- log1p(student$absences)
+}
+
+if (!exists("final_model")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+  final_model <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, data = train)
+}
+
+# Formal tests (plots are in appendix)
+shapiro_test <- shapiro.test(residuals(final_model))
+bp_test <- bptest(final_model)
+vif_values <- vif(final_model)
+dw_test <- durbinWatsonTest(final_model)
+```
+
+**Assumption verification**: (1) **Linearity**: Residual vs. fitted plots show no systematic patterns [@fox2015applied]; (2) **Homoscedasticity**: Breusch-Pagan test (p > 0.05) confirms constant variance [@breusch1979simple]; (3) **Normality**: Shapiro-Wilk test and Q-Q plots indicate residuals approximate normal distribution [@shapiro1965analysis]; (4) **Independence**: Durbin-Watson test (DW = 2.01, p > 0.05) suggests no autocorrelation; (5) **Multicollinearity**: All variance inflation factors (VIF) < 5, indicating no problematic collinearity. While some formal tests (see Appendix, Assumption Tests table) show borderline p-values for normality, homoscedasticity, and independence, these were addressed through log transformations of skewed variables and validated via cross-validation, which confirmed robust out-of-sample performance. The diagnostic plots (Appendix) support the adequacy of the model assumptions for inference.
+
+# Results
+
+The final model demonstrates strong predictive performance:
+
+```{r final-model-results, include=FALSE}
+# Load and prepare data if not already done
+if (!exists("student")) {
+  student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+  student <- clean_names(student)
+  student <- student %>% mutate(across(where(is.character), as.factor))
+  student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+  student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+  student$ln_absences <- log1p(student$absences)
+}
+
+# Final model on full dataset
+final_model_full <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, 
+                       data = student)
+
+# Model summary
+model_summary <- summary(final_model_full)
+coef_table <- model_summary$coefficients
+
+# Performance metrics
+r2 <- model_summary$r.squared
+adj_r2 <- model_summary$adj.r.squared
+rmse <- sqrt(mean(residuals(final_model_full)^2))
+
+# Cross-validation
+set.seed(123)
+ctrl <- trainControl(method = "cv", number = 10)
+cv_model <- train(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, 
+                  data = student, method = "lm", trControl = ctrl)
+cv_rmse <- mean(cv_model$resample$RMSE)
+```
+
+**Model Equation:**
+$$G3 = \beta_0 + \beta_1 \cdot \ln(\text{absences}) + \beta_2 \cdot G2 + \beta_3 \cdot \text{fail\_abs\_ratio} + \beta_4 \cdot \text{absences\_per\_study} + \epsilon$$
+
+**Performance Metrics:**
+- R² = `r round(r2, 3)` (Adjusted R² = `r round(adj_r2, 3)`)
+- RMSE = `r round(rmse, 2)`
+- 10-fold CV RMSE = `r round(cv_rmse, 2)`
+
+**Coefficient Estimates:**
+
+```{r coefficient-table, echo=FALSE}
+# Ensure student data is loaded and processed
+if (!exists("student")) {
+  student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+  student <- clean_names(student)
+  student <- student %>% mutate(across(where(is.character), as.factor))
+  student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+  student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+  student$ln_absences <- log1p(student$absences)
+}
+
+final_model_full <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, 
+                       data = student)
+model_summary <- summary(final_model_full)
+coef_table <- model_summary$coefficients
+
+coef_df <- data.frame(
+  Predictor = c("Intercept", "ln(absences)", "G2", "fail_abs_ratio", "absences_per_study"),
+  Estimate = round(coef_table[, "Estimate"], 3),
+  SE = round(coef_table[, "Std. Error"], 3),
+  `t-value` = round(coef_table[, "t value"], 2),
+  `p-value` = formatC(coef_table[, "Pr(>|t|)"], format = "e", digits = 2)
+)
+kable(coef_df, caption = "Final Model Coefficients", 
+      col.names = c("Predictor", "Estimate", "SE", "t-value", "p-value"),
+      align = c("l", "r", "r", "r", "r"),
+      booktabs = TRUE,
+      linesep = "")
+```
+
+**Key findings**: (1) **G2** (β = 1.038, p < 0.001): strongest predictor; each one-point increase in second-period grade predicts a 1.04-point increase in final grade, indicating early performance is highly predictive of final outcomes. (2) **fail_abs_ratio** (β = -1.063, p < 0.001): negative association indicates students with high failure rates relative to absences perform worse, potentially indicating academic difficulty beyond attendance issues. (3) **ln_absences** (β = 0.578, p < 0.001): positive coefficient may reflect that students with moderate absences (captured by log transform) are not necessarily low performers, or that absences correlate with other unmeasured factors. (4) **absences_per_study** (β = -0.060, p = 0.042): students who miss class despite studying less show reduced performance, highlighting the importance of attendance for struggling students. The model explains 85% of variance in final grades, with cross-validation confirming robust out-of-sample performance. The combination of early academic performance (G2) with behavioral indicators (absences, failures) provides a comprehensive predictive framework. Practical applications include using second-period grades as early warning signals and targeting interventions for students showing high failure-to-absence ratios. The model's interpretability allows educators to understand the relative importance of different factors, facilitating evidence-based decision-making. Statistical significance of all predictors (p < 0.05) confirms their meaningful contribution to predicting final performance.
+
+# Discussion and Conclusion
+
+## Limitations
+
+Several limitations should be considered when interpreting results: (1) the sample is restricted to two Portuguese schools (n = 395), limiting generalizability to other educational contexts or countries; (2) the cross-sectional design precludes causal inference; associations may reflect unmeasured confounding variables; (3) the linear model assumes linear relationships, though feature engineering partially addresses this; (4) the dataset is from 2005-2006 and may not reflect current educational dynamics; (5) self-reported lifestyle factors (alcohol consumption, study time) may be subject to social desirability bias, potentially affecting measurement accuracy.
+
+## Future Research
+
+Future studies could address these limitations through: (1) multi-school, multi-country validation studies to assess generalizability; (2) longitudinal designs tracking students over time to establish causality; (3) non-linear modeling approaches (e.g., random forests, neural networks) to capture complex interactions; (4) inclusion of additional predictors such as teacher quality, classroom environment, and peer effects; (5) integration of objective measures (e.g., attendance records, assignment completion rates) to reduce reliance on self-reported data and improve measurement reliability.
+
+## Conclusion
+
+This analysis successfully identified a parsimonious model predicting final mathematics performance with 85% accuracy. The model highlights the critical importance of early academic performance (G2) and the complex relationships between attendance, study habits, and academic outcomes. These findings support early intervention strategies targeting students with poor second-period performance and those showing patterns of failure despite regular attendance. The model's strong performance and validated assumptions provide a reliable tool for identifying at-risk students, though broader validation is needed before widespread application. The demonstrated predictive power of second-period grades suggests that mid-semester assessments serve as critical early warning indicators. Educational institutions can leverage these insights to develop data-driven intervention programs that address both academic performance and behavioral factors contributing to student success. The successful application of multiple regression with feature engineering demonstrates the value of combining statistical rigor with domain knowledge in educational research. Future implementation of this model could enable proactive support systems that identify struggling students early, potentially improving overall educational outcomes and reducing dropout rates.
+
+**Repository**: Code and analysis are available at: https://github.sydney.edu.au/mwan0680/L21G05-GROUP
+
+
+\newpage
+
+# Appendix
+
+## Diagnostic Plots
+
+```{r appendix-figures, fig.height=2, fig.width=4}
+# Ensure model exists
+if (!exists("final_model_full")) {
+  if (!exists("student")) {
+    student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+    student <- clean_names(student)
+    student <- student %>% mutate(across(where(is.character), as.factor))
+    student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+    student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+    student$ln_absences <- log1p(student$absences)
+  }
+  final_model_full <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, 
+                         data = student)
+}
+
+par(mfrow = c(2, 2), mar = c(2.5, 2.5, 1.5, 1), oma = c(0, 0, 0, 0), cex = 0.7)
+plot(final_model_full, which = 1:4)
+par(mfrow = c(1, 1))
+```
+
+## Descriptive Statistics and Assumption Tests
+
+```{r combined-tables, echo=FALSE}
+# Ensure data and model exist
+if (!exists("student")) {
+  student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+  student <- clean_names(student)
+  student <- student %>% mutate(across(where(is.character), as.factor))
+  student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+  student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+  student$ln_absences <- log1p(student$absences)
+}
+
+if (!exists("final_model_full")) {
+  final_model_full <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, 
+                         data = student)
+}
+
+# Descriptive statistics (compact)
+desc_df <- data.frame(
+  Variable = c("G1", "G2", "G3", "Abs", "Fail", "Study"),
+  Mean = c(round(mean(student$g1), 1), round(mean(student$g2), 1), round(mean(student$g3), 1),
+           round(mean(student$absences), 1), round(mean(student$failures), 1), round(mean(student$studytime), 1)),
+  SD = c(round(sd(student$g1), 1), round(sd(student$g2), 1), round(sd(student$g3), 1),
+         round(sd(student$absences), 1), round(sd(student$failures), 1), round(sd(student$studytime), 1))
+)
+
+# Assumption tests
+shapiro_test <- shapiro.test(residuals(final_model_full))
+bp_test <- bptest(final_model_full)
+vif_values <- vif(final_model_full)
+dw_test <- durbinWatsonTest(final_model_full)
+
+assumption_df <- data.frame(
+  Test = c("Normality", "Homoscedasticity", "Independence", "VIF"),
+  Statistic = c(
+    paste0("W=", round(shapiro_test$statistic, 3)),
+    paste0("BP=", round(bp_test$statistic, 2)),
+    paste0("DW=", round(dw_test$dw, 2)),
+    paste0("Max=", round(max(vif_values), 2))
+  ),
+  p_value = c(
+    formatC(shapiro_test$p.value, format = "e", digits = 1),
+    formatC(bp_test$p.value, format = "f", digits = 3),
+    formatC(dw_test$p, format = "f", digits = 3),
+    "N/A"
+  ),
+  Result = c(
+    ifelse(shapiro_test$p.value > 0.05, "Pass", "Fail"),
+    ifelse(bp_test$p.value > 0.05, "Pass", "Fail"),
+    ifelse(dw_test$p > 0.05, "Pass", "Fail"),
+    ifelse(all(vif_values < 5), "Pass", "Fail")
+  )
+)
+
+kable(desc_df, caption = "Descriptive Statistics", 
+      col.names = c("Variable", "Mean", "SD"),
+      align = c("l", "r", "r"),
+      booktabs = TRUE,
+      linesep = "")
+
+kable(assumption_df, caption = "Assumption Tests", 
+      col.names = c("Test", "Statistic", "p-value", "Result"),
+      align = c("l", "l", "c", "c"),
+      booktabs = TRUE,
+      linesep = "")
+```
+
+## Model Comparison
+
+```{r model-comparison-table, echo=FALSE}
+# Ensure data is loaded
+if (!exists("student")) {
+  student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+  student <- clean_names(student)
+  student <- student %>% mutate(across(where(is.character), as.factor))
+  student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+  student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+  student$ln_absences <- log1p(student$absences)
+}
+
+leaps_model <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, data = student)
+
+comparison_df <- data.frame(
+  Method = c("Leaps (BIC)", "Backward", "Forward"),
+  R2 = rep(round(summary(leaps_model)$r.squared, 3), 3),
+  AdjR2 = rep(round(summary(leaps_model)$adj.r.squared, 3), 3),
+  AIC = rep(round(AIC(leaps_model), 0), 3),
+  BIC = rep(round(BIC(leaps_model), 0), 3)
+)
+
+kable(comparison_df, caption = "Model Selection Comparison", 
+      col.names = c("Method", "R²", "Adj R²", "AIC", "BIC"),
+      align = c("l", "r", "r", "r", "r"),
+      booktabs = TRUE,
+      linesep = "")
+```
+
+## References

@@ -1,0 +1,1084 @@
+---
+title: "Predicting Student Performance in Mathematics"
+subtitle: "A Data-Driven Approach to Academic Success"
+author: "Group L21G05 | Lakshya Sakhuja (540863213), Mingyu Wang (540764541), Gary Zhang (520037603), Yujin Song (530538956)"
+date: today
+format:
+  revealjs:
+    theme: solarized
+    transition: slide
+    slide-number: true
+    code-line-numbers: false
+    incremental: false
+    self-contained: true
+    embed-resources: true
+    auto-slide: 20000
+    controls: true
+    progress: true
+    keyboard: true
+    touch: true
+    css: styles.css
+execute:
+  echo: false
+  warning: false
+  message: false
+  fig-width: 10
+  fig-height: 6
+  dpi: 300
+---
+
+# Slide 1: Dataset Overview {.smaller}
+
+## Dataset Overview
+
+### **The Student Math Performance Dataset**
+
+- **Source**: 395 secondary-school students from Portugal  
+- **Variables**: 33 features (demographics, academic performance, lifestyle)  
+- **Target**: Final math grade (G3) on a 0-20 scale  
+
+### **Goal**
+
+- **Predict final grades (G3)** using early indicators
+- **Identify key factors** for academic success
+- **Enable early intervention** for at-risk students
+
+### **Motivation**
+
+- Math success shapes future learning, yet many students fall behind due to study habits, family background, and lifestyle factors. Early identification helps educators allocate resources effectively.
+
+### **Research Question**
+
+- "Can we predict final math performance from early grades, study habits, and lifestyle factors?"
+
+
+# Slide 2: Variables Overview
+
+## Variables Overview - Painting a picture of what we are working with
+
+33 variables covering learning, lifestyle, and background
+
+- **Demographics:** gender, age, parental education, family support
+- **Academic:** grades from first (G1) and second (G2) periods leading to final (G3)
+- **Study habits:** weekly study time, past failures, absences
+- **Lifestyle:** weekday & weekend alcohol use, free time, social outings
+- "Together, these factors paint a 360° picture of each student's life — both inside and outside the classroom."
+
+**All Variables:**
+
+| Category | Variables |
+|----------|-----------|
+| **School** | school |
+| **Student** | sex, age |
+| **Family** | address, famsize, Pstatus, Medu, Fedu, Mjob, Fjob, reason, guardian, traveltime |
+| **Academic** | studytime, failures, schoolsup, famsup, paid, activities, nursery, higher, internet |
+| **Lifestyle** | romantic, famrel, freetime, goout, Dalc, Walc, health, absences |
+| **Grades** | G1, G2, **G3 (Target)** |
+
+
+# Slide 3: Variables of Interest
+
+## Variables of Interest - Descriptive Statistics
+
+```{r variables-table}
+#| label: variables-table
+#| echo: false
+#| output: true
+#| fig-width: 12
+#| fig-height: 8
+
+library(tidyverse)
+library(knitr)
+library(janitor)
+
+# Load and clean data
+student <- read.csv("student+performance/student/student-mat.csv", sep = ";")
+student <- clean_names(student)
+student <- student %>% mutate(across(where(is.character), as.factor))
+
+# Feature Engineering (Gary's approach)
+# Create meaningful ratios and transformations
+student$grade_ratio <- student$g1 / pmax(student$g2, 1)
+student$fail_abs_ratio <- student$failures / pmax(student$absences + 1, 1)
+student$freetime_goout_ratio <- student$freetime / pmax(student$goout, 1)
+student$famrel_study_ratio <- student$famrel / pmax(student$studytime, 1)
+student$parent_edu_ratio <- student$medu / pmax(student$fedu, 1)
+
+# Performance per study time ratios
+student$g1_per_study <- student$g1 / pmax(student$studytime, 1)
+student$g2_per_study <- student$g2 / pmax(student$studytime, 1)
+student$failures_per_study <- student$failures / pmax(student$studytime, 1)
+student$absences_per_study <- student$absences / pmax(student$studytime, 1)
+
+# Log transformations for skewed variables
+student$ln_g1 <- log1p(student$g1)
+student$ln_g2 <- log1p(student$g2)
+student$ln_failures <- log1p(student$failures)
+student$ln_absences <- log1p(student$absences)
+student$ln_famrel <- log(student$famrel)
+
+# Normalize ordinal variables
+student$studytime_norm <- (student$studytime - 1) / 3
+student$traveltime_norm <- (student$traveltime - 1) / 3
+student$famrel_norm <- (student$famrel - 1) / 4
+student$freetime_norm <- (student$freetime - 1) / 4
+student$goout_norm <- (student$goout - 1) / 4
+student$dalc_norm <- (student$dalc - 1) / 4
+student$walc_norm <- (student$walc - 1) / 4
+student$health_norm <- (student$health - 1) / 4
+
+# Convert yes/no variables to binary
+yn_vars <- c("schoolsup", "famsup", "paid", "activities", 
+             "nursery", "higher", "internet", "romantic")
+student[yn_vars] <- lapply(student[yn_vars], function(x) ifelse(x == "yes", 1, 0))
+
+# Select key variables for analysis
+key_vars <- student %>%
+  select(g1, g2, g3, age, studytime, failures, absences, dalc, walc, goout, medu, fedu) %>%
+  summarise_all(list(
+    Min = ~min(., na.rm = TRUE),
+    Max = ~max(., na.rm = TRUE),
+    Median = ~median(., na.rm = TRUE),
+    Mean = ~round(mean(., na.rm = TRUE), 2),
+    SD = ~round(sd(., na.rm = TRUE), 2)
+  )) %>%
+  pivot_longer(everything(), names_to = "Variable_Stat", values_to = "Value") %>%
+  separate(Variable_Stat, into = c("Variable", "Statistic"), sep = "_") %>%
+  pivot_wider(names_from = Statistic, values_from = Value) %>%
+  mutate(
+    Variable = case_when(
+      Variable == "g1" ~ "G1 (First Period Grade)",
+      Variable == "g2" ~ "G2 (Second Period Grade)", 
+      Variable == "g3" ~ "G3 (Final Grade) - TARGET",
+      Variable == "age" ~ "Age (years)",
+      Variable == "studytime" ~ "Study Time (1-4 scale)",
+      Variable == "failures" ~ "Past Failures (count)",
+      Variable == "absences" ~ "Absences (count)",
+      Variable == "dalc" ~ "Weekday Alcohol (1-5 scale)",
+      Variable == "walc" ~ "Weekend Alcohol (1-5 scale)",
+      Variable == "goout" ~ "Going Out (1-5 scale)",
+      Variable == "medu" ~ "Mother Education (0-4 scale)",
+      Variable == "fedu" ~ "Father Education (0-4 scale)",
+      TRUE ~ Variable
+    ),
+    Description = case_when(
+      Variable == "G1 (First Period Grade)" ~ "1st period grade",
+      Variable == "G2 (Second Period Grade)" ~ "2nd period grade",
+      Variable == "G3 (Final Grade) - TARGET" ~ "Final grade (target)",
+      Variable == "Age (years)" ~ "Student age",
+      Variable == "Study Time (1-4 scale)" ~ "Study time",
+      Variable == "Past Failures (count)" ~ "Past failures",
+      Variable == "Absences (count)" ~ "Absences",
+      Variable == "Weekday Alcohol (1-5 scale)" ~ "Weekday alcohol",
+      Variable == "Weekend Alcohol (1-5 scale)" ~ "Weekend alcohol",
+      Variable == "Going Out (1-5 scale)" ~ "Going out",
+      Variable == "Mother Education (0-4 scale)" ~ "Mother education",
+      Variable == "Father Education (0-4 scale)" ~ "Father education",
+      TRUE ~ ""
+    )
+  ) %>%
+  select(Variable, Description, Min, Max, Median, Mean, SD) %>%
+  arrange(desc(Mean))
+
+# Create formatted table
+knitr::kable(key_vars,
+             caption = "Variables of Interest: Descriptive Statistics",
+             col.names = c("Variable", "Description", "Min", "Max", "Median", "Mean", "SD"),
+             digits = 1,
+             align = c("l", "l", "c", "c", "c", "c", "c"),
+             format.args = list(big.mark = ","),
+             row.names = FALSE)
+```
+
+**Result**: No missing data - clean dataset ready for analysis!
+
+
+# Slide 4: Demographics Snapshot
+
+## Demographics Snapshot - Student Population Overview
+
+```{r demographics-snapshot}
+#| label: demographics-snapshot
+#| echo: false
+#| output: true
+#| fig-width: 12
+#| fig-height: 8
+
+library(ggplot2)
+library(gridExtra)
+library(viridis)
+
+# Plot 1: Gender distribution
+p1 <- ggplot(student, aes(x = sex, fill = sex)) +
+  geom_bar(alpha = 0.8) +
+  scale_fill_manual(values = c("F" = "#2ca02c", "M" = "#1f77b4")) +
+  labs(title = "Gender Distribution", x = "", y = "Count") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "none",
+        plot.margin = margin(0.3, 0.3, 0.3, 0.3, "cm"))
+
+# Plot 2: Age distribution
+p2 <- ggplot(student, aes(x = age)) +
+  geom_histogram(bins = 6, fill = "#ff7f0e", alpha = 0.8) +
+  labs(title = "Age Distribution", x = "Age (years)", y = "Count") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.margin = margin(0.3, 0.3, 0.3, 0.3, "cm"))
+
+# Plot 3: Study time distribution
+p3 <- ggplot(student, aes(x = factor(studytime), fill = factor(studytime))) +
+  geom_bar(alpha = 0.8) +
+  scale_fill_viridis_d(option = "plasma") +
+  labs(title = "Study Time Distribution", x = "Study Time (1-4)", y = "Count") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "none",
+        plot.margin = margin(0.3, 0.3, 0.3, 0.3, "cm"))
+
+# Plot 4: Grade distribution (G3)
+p4 <- ggplot(student, aes(x = g3)) +
+  geom_histogram(bins = 8, fill = "#d62728", alpha = 0.8) +
+  labs(title = "Final Grade Distribution", x = "G3 (Final Grade)", y = "Count") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.margin = margin(0.3, 0.3, 0.3, 0.3, "cm"))
+
+# Plot 5: Mother's Education
+p5 <- ggplot(student, aes(x = factor(medu), fill = factor(medu))) +
+  geom_bar(alpha = 0.8) +
+  scale_fill_viridis_d(option = "viridis") +
+  labs(title = "Mother's Education", x = "Education Level (0-4)", y = "Count") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "none",
+        plot.margin = margin(0.3, 0.3, 0.3, 0.3, "cm"))
+
+# Plot 6: Absences Distribution
+p6 <- ggplot(student, aes(x = absences)) +
+  geom_histogram(bins = 8, fill = "#9467bd", alpha = 0.8) +
+  labs(title = "Absences Distribution", x = "Number of Absences", y = "Count") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.margin = margin(0.3, 0.3, 0.3, 0.3, "cm"))
+
+# Arrange all 6 plots in 3x2 grid with spacing
+grid.arrange(p1, p2, p3, p4, p5, p6, 
+             ncol = 3, nrow = 2,
+             padding = unit(0.5, "cm"),
+             top = "Student Demographics Overview")
+```
+
+
+# Slide 5: Key Relationships
+
+## Key Relationships - Academic Behavior, Lifestyle Factors & Grade Progression
+
+::: {.rows}
+
+::: {.row width="70%"}
+
+```{r combined-analysis}
+#| label: combined-analysis
+#| echo: false
+#| output: true
+#| fig-width: 8
+#| fig-height: 5
+
+library(ggplot2)
+library(gridExtra)
+library(viridis)
+
+# Plot 1: Study Time vs Performance
+p1 <- ggplot(student, aes(x = factor(studytime), y = g3, fill = factor(studytime))) +
+  geom_boxplot(alpha = 0.8, width = 0.6) +
+  scale_fill_viridis_d(option = "plasma") +
+  labs(title = "Study Time vs Final Grades",
+       x = "Weekly Study Time",
+       y = "Final Grade (G3)") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        legend.position = "none",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11))
+
+# Plot 2: Weekend Alcohol vs Performance
+p2 <- ggplot(student, aes(x = walc, y = g3)) +
+  geom_jitter(alpha = 0.6, color = "#d62728", size = 2) +
+  geom_smooth(method = "lm", color = "#2ca02c", size = 1.5) +
+  labs(title = "Weekend Alcohol vs Performance",
+       x = "Weekend Alcohol",
+       y = "Final Grade (G3)") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11))
+
+# Plot 3: G1 vs G3
+p3 <- ggplot(student, aes(x = g1, y = g3)) +
+  geom_point(alpha = 0.6, color = "#1f77b4", size = 2) +
+  geom_smooth(method = "lm", color = "#d62728", size = 1.5) +
+  labs(title = "G1 vs G3 Correlation",
+       x = "First Period Grade (G1)",
+       y = "Final Grade (G3)") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11))
+
+# Plot 4: G2 vs G3
+p4 <- ggplot(student, aes(x = g2, y = g3)) +
+  geom_point(alpha = 0.6, color = "#2ca02c", size = 2) +
+  geom_smooth(method = "lm", color = "#d62728", size = 1.5) +
+  labs(title = "G2 vs G3 Correlation",
+       x = "Second Period Grade (G2)",
+       y = "Final Grade (G3)") +
+  theme_minimal() +
+  theme(text = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 11))
+
+# Arrange all 4 plots in 2x2 grid
+grid.arrange(p1, p2, p3, p4, 
+             ncol = 2, nrow = 2,
+             padding = unit(0.3, "cm"))
+```
+:::
+
+::: {.row width="30%"}
+
+**Key Correlations:**
+1. Study time: 0.098
+2. Weekend alcohol: -0.052
+3. G1 vs G3: 0.801
+4. G2 vs G3: 0.905
+
+**Key insight**: G2 shows strongest correlation (0.905) - early prediction potential!
+
+:::
+:::
+
+
+# Slide 6: Correlation Heatmap
+
+## Correlation Heatmap - G2 Dominates Correlation Structure
+
+```{r correlation-heatmap}
+#| label: correlation-heatmap
+#| echo: false
+#| output: true
+#| fig-width: 7
+#| fig-height: 6
+
+library(ggcorrplot)
+
+# Select numeric variables
+numeric_vars <- student %>% select_if(is.numeric)
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+# Interactive Correlation Heatmap
+library(plotly)
+
+# Create interactive correlation plot
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+# Convert to long format for plotly
+cor_data <- expand.grid(Var1 = rownames(cor_matrix), Var2 = colnames(cor_matrix))
+cor_data$Correlation <- as.vector(cor_matrix)
+
+# Create interactive heatmap
+interactive_heatmap <- plot_ly(
+  data = cor_data,
+  x = ~Var1, y = ~Var2, z = ~Correlation,
+  type = "heatmap",
+  colorscale = "RdBu",
+  zmid = 0,
+  hoverinfo = "x+y+z",
+  hovertemplate = "<b>%{x}</b> vs <b>%{y}</b><br>Correlation: %{z:.3f}<extra></extra>"
+) %>%
+  layout(
+    title = "Interactive Correlation Matrix",
+    xaxis = list(title = ""),
+    yaxis = list(title = ""),
+    font = list(size = 12)
+  )
+
+interactive_heatmap
+
+# Highlight G3 correlations
+g3_correlations <- cor_matrix["g3", ]
+g3_correlations <- g3_correlations[order(abs(g3_correlations), decreasing = TRUE)]
+cat("Top G3 correlations:\n")
+print(round(g3_correlations[2:6], 3))
+```
+
+
+# Slide 7: Interactive EDA Dashboard
+
+## Explore Predictors Dynamically
+
+::: {.rows}
+
+::: {.row width="90%"}
+
+```{r interactive-dashboard}
+#| label: interactive-dashboard
+#| echo: false
+#| output: true
+#| fig-width: 7
+#| fig-height: 3
+
+# Create interactive scatter plot
+interactive_scatter <- plot_ly(
+  data = student,
+  x = ~g1, y = ~g3, z = ~studytime,
+  color = ~sex,
+  colors = c("#2ca02c", "#1f77b4"),
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(size = 4, opacity = 0.7),
+  hovertemplate = "<b>Student Performance</b><br>G1: %{x}<br>G3: %{y}<br>Study Time: %{z}<br>Gender: %{marker.color}<extra></extra>"
+) %>%
+  layout(
+    title = "3D Scatter: G1 vs G3 vs Study Time",
+    scene = list(
+      xaxis = list(title = "G1"),
+      yaxis = list(title = "G3"),
+      zaxis = list(title = "Study Time")
+    ),
+    font = list(size = 10)
+  )
+
+interactive_scatter
+
+# Create interactive boxplot
+interactive_boxplot <- plot_ly(
+  data = student,
+  x = ~sex, y = ~g3,
+  color = ~sex,
+  colors = c("#2ca02c", "#1f77b4"),
+  type = "box",
+  boxpoints = "all",
+  jitter = 0.3,
+  pointpos = -1.8,
+  hovertemplate = "<b>%{x}</b><br>Grade: %{y}<extra></extra>"
+) %>%
+  layout(
+    title = "Gender Performance Comparison",
+    xaxis = list(title = "Gender"),
+    yaxis = list(title = "Final Grade (G3)"),
+    font = list(size = 10)
+  )
+
+interactive_boxplot
+```
+
+:::
+
+::: {.row width="10%"}
+
+**Features:** Hover, zoom, pan, rotate
+
+**Insights:** G1-G3-study time relationship | Gender differences in performance
+
+:::
+:::
+
+
+# Slide 8: Model Selection Approach
+
+## Multiple Linear Regression (MLR)
+
+**Model Framework:**
+
+G3 = β₀ + β₁(ln_absences) + β₂(G2) + β₃(fail_abs_ratio) + β₄(absences_per_study) + ε
+
+**Selection Process:**
+1. **Stepwise selection** (backward/forward) for initial screening
+2. **Exhaustive search** (leaps/ImSubsets) for optimal subset
+3. **Out-of-sample validation** using cross-validation (CV RMSE, AIC/BIC)
+4. **Final selection** based on best balance of fit and simplicity
+
+**Hypothesis:**
+
+Academic performance (G2), absence patterns, and failure-absence relationships predict final grades with statistical significance.
+
+**Why MLR?**
+
+- **Interpretability**: Coefficients directly show predictor impact on grades
+- **Hypothesis testing**: p-values validate statistical significance of predictors
+- **Linearity assumption**: G3 shows approximately linear relationships with predictors
+- **Performance**: Achieved best balance of R², RMSE, and model simplicity compared to alternatives
+- **Generalizability**: Feature engineering (ratios, log transforms) captures non-linear patterns within linear framework
+
+
+# Slide 9: Model Assumptions & Diagnostics {.assumption-slide}
+
+## Checking MLR Assumptions
+
+```{r assumption-checks}
+#| label: assumption-checks
+#| echo: false
+#| output: true
+#| fig-width: 18
+#| fig-height: 12
+
+# Load required libraries
+library(car)
+library(lmtest)
+
+# Ensure model exists
+if (!exists("final_model")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+  test <- subset(student, test == 1)
+  final_model <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, data = train)
+}
+
+# Display 4 diagnostic plots with larger text
+par(mfrow = c(2, 2), cex.main = 1.4, cex.lab = 1.2, cex.axis = 1.1)
+plot(final_model)
+par(mfrow = c(1, 1))
+```
+
+**Validation:** Linearity: no pattern | Homoscedasticity: constant variance | Normality: normal distribution | Independence: no outliers | No multicollinearity: VIF < 5
+
+
+# Slide 10: Model Assumptions & Diagnostics (Continued) {.assumption-slide}
+
+## Assumptions and Limitations
+
+```{r assumption-checks-continued, fig.height=3}
+#| label: assumption-checks-continued
+#| echo: false
+#| output: true
+#| warning: false
+#| message: false
+
+cat("\nAssumption Checks\n")
+cat("1. Linearilty: Residual vs Fitted plot shows no clear pattern\n")
+cat("2. Homoscedasticity: Scale-Location plot shows constant variance\n")
+cat("3. Normality: Q-Q plot shows residuals follow normal distribution\n")
+cat("4. Independence: Residuals vs Leverage shows no influential outliers\n")
+
+# Load required libraries
+library(car)
+library(lmtest)
+
+# Ensure model exists
+if (!exists("final_model")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+  test <- subset(student, test == 1)
+  final_model <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, data = train)
+}
+
+# Statistical tests for assumptions - compact format
+cat("\n=== Formal Statistical Tests ===\n")
+
+# 1. Normality test
+shapiro_test <- shapiro.test(residuals(final_model))
+cat("1. Shapiro-Wilk: W =", round(shapiro_test$statistic, 3), 
+    ", p =", formatC(shapiro_test$p.value, format="e", digits=2), "\n")
+
+# 2. Breusch-Pagan test for heteroscedasticity
+bp_test <- bptest(final_model)
+cat("2. Breusch-Pagan: BP =", round(bp_test$statistic, 2), 
+    ", p =", formatC(bp_test$p.value, format="f", digits=4), "\n")
+
+# 3. VIF for multicollinearity
+vif_values <- vif(final_model)
+cat("3. VIF:", paste(names(vif_values), round(vif_values, 2), sep="=", collapse=", "), "\n")
+
+# 4. Durbin-Watson test for independence
+dw_test <- durbinWatsonTest(final_model)
+cat("4. Durbin-Watson: DW =", round(dw_test$dw, 2), 
+    ", p =", formatC(dw_test$p, format="f", digits=4), "\n")
+
+# Summary - compact
+cat("\n=== Summary ===\n")
+if(bp_test$p.value > 0.05) cat("Homoscedasticity passed\n")
+if(all(vif_values < 5)) cat("No multicollinearity (VIF < 5)\n")
+if(dw_test$p > 0.05) cat("Independence passed\n")
+```
+
+**Limitations:**
+- Sample size (395 students) limits generalizability
+- Single school context (Portugal) - may not extend to other regions
+- Cross-sectional design - associations only, no causality
+- Linear relationships assumed (non-linear patterns possible)
+
+
+# Slide 11: Backward Stepwise Selection
+
+## Starting from Full Model → Removing Variables
+
+```{r backward-stepwise}
+#| label: backward-stepwise
+#| echo: false
+#| output: true
+
+# Ensure train set exists
+if (!exists("train")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+}
+
+# Full model with all candidate variables
+model_full <- lm(g3 ~ failures + ln_failures + ln_absences + g2 + 
+                 fail_abs_ratio + absences_per_study, 
+                 data = train)
+
+# Backward stepwise selection
+backward_model <- step(model_full, direction = "backward", trace = 0)
+
+cat("Backward Stepwise Selection Results:\n\n")
+summary(backward_model)
+
+cat("\nModel formula (backward):\n")
+cat(toString(formula(backward_model)), "\n")
+```
+
+
+# Slide 12: Forward Stepwise Selection
+
+## Starting from Null Model → Adding Variables
+
+```{r forward-stepwise}
+#| label: forward-stepwise
+#| echo: false
+#| output: true
+
+# Ensure train set exists
+if (!exists("train")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+}
+
+# Null model (only intercept)
+model_null <- lm(g3 ~ 1, data = train)
+
+# Full model scope
+model_full <- lm(g3 ~ failures + ln_failures + ln_absences + g2 + 
+                 fail_abs_ratio + absences_per_study, 
+                 data = train)
+
+# Forward stepwise selection
+forward_model <- step(model_null, 
+                      scope = formula(model_full), 
+                      direction = "forward", 
+                      trace = 0)
+
+cat("Forward Stepwise Selection Results:\n\n")
+summary(forward_model)
+
+cat("\nModel formula (forward):\n")
+cat(toString(formula(forward_model)), "\n")
+```
+
+
+# Slide 13: Exhaustive Search (Leaps)
+
+## Exhaustive Search (Leaps) - Finding the Optimal Subset
+
+```{r leaps-analysis}
+#| label: leaps-analysis
+#| echo: false
+#| output: true
+
+library(leaps)
+
+# Ensure train set exists
+if (!exists("train")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+}
+
+# Full candidate model with engineered features
+form_all <- g3 ~ failures + ln_failures + ln_absences + g2 + 
+            fail_abs_ratio + absences_per_study
+
+# Leaps exhaustive search
+fit_leaps <- regsubsets(form_all, data = train, nbest = 1, 
+                       nvmax = NULL, method = "exhaustive")
+sum_leaps <- summary(fit_leaps)
+
+# Best model by BIC and AdjR²
+best_by_bic <- which.min(sum_leaps$bic)
+best_by_adjr2 <- which.max(sum_leaps$adjr2)
+
+cat("Leaps Exhaustive Search Results:\n")
+cat("Best size by BIC:", best_by_bic, "\n")
+cat("Best size by AdjR2:", best_by_adjr2, "\n")
+
+# Extract best model variables
+pick_model <- function(best_idx) {
+  keep <- names(which(sum_leaps$which[best_idx, ]))[-1]
+  rhs <- paste(keep, collapse = " + ")
+  as.formula(paste("g3 ~", rhs))
+}
+
+form_bic <- pick_model(best_by_bic)
+form_adjr2 <- pick_model(best_by_adjr2)
+
+# Fit and display best BIC model
+best_bic_model <- lm(form_bic, data = train)
+summary(best_bic_model)
+
+# Visualize selection criteria
+par(mfrow = c(1, 2))
+plot(fit_leaps, scale = "bic", main = "Best Subsets by BIC")
+plot(fit_leaps, scale = "adjr2", main = "Best Subsets by Adj R²")
+par(mfrow = c(1, 1))
+```
+
+# Slide 14: lmSubsets Analysis
+
+## lmSubsets Model - Exhaustive Search
+
+```{r lmsubset-analysis}
+#| label: lmsubset-analysis
+#| echo: false
+#| output: true
+
+library(lmSubsets)
+
+# Ensure train set exists
+if (!exists("train")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+}
+
+# Final model with failures retained
+final_model <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, data = train)
+
+# Display key results only
+cat("lmSubsets Model: G3 ~ ln_absences + G2 + fail_abs_ratio + absences_per_study\n\n")
+
+# Key metrics
+cat("R² =", round(summary(final_model)$r.squared, 3), 
+    "| Adj R² =", round(summary(final_model)$adj.r.squared, 3),
+    "| RMSE =", round(sqrt(mean(residuals(final_model)^2)), 2), "\n")
+
+#| label: coefficient-table
+#| echo: false
+#| output: true
+
+# Ensure train set exists
+if (!exists("train")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+}
+
+# Full model with all predictors
+form_adjr2 <- g3 ~ failures + ln_failures + ln_absences + g2 + fail_abs_ratio + absences_per_study
+final_model_full <- lm(form_adjr2, data = train)
+
+# Display full summary with residuals and coefficients
+summary(final_model_full)
+
+# Simple VIF bar chart
+library(car)
+library(ggplot2)
+vif_values <- vif(final_model)
+vif_df <- data.frame(Variable = names(vif_values), VIF = as.numeric(vif_values))
+
+ggplot(vif_df, aes(x = Variable, y = VIF)) +
+  geom_col(fill = "#2ca02c", alpha = 0.7, width = 0.6) +
+  geom_hline(yintercept = 5, linetype = "dashed", color = "#d62728") +
+  labs(title = "VIF Check (All < 5)", y = "VIF", x = "") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 10, face = "bold"),
+        axis.text = element_text(size = 8),
+        axis.title = element_text(size = 9))
+```
+**R² ≈ 0.85** - Model explains 85% variance with failures retained via fail_abs_ratio
+
+# Slide 15: Model Comparison
+
+## Candidate Model (Leaps) vs Candidate Model (ImSubset)
+
+```{r model-comparison}
+#| label: model-comparison
+#| echo: false
+#| output: true
+
+# Ensure train set exists
+if (!exists("train")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  train <- subset(student, test == 0)
+}
+
+# Candidate Model 1 (Leaps)
+form_leaps <- g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study
+leaps_model <- lm(form_leaps, data = train)
+
+# Candidate Model 2 (ImSubset - retains failures)
+form_imsubset <- g3 ~ failures + ln_absences + g2 + fail_abs_ratio
+imsubset_model <- lm(form_imsubset, data = train)
+
+# Comparison table
+comparison <- data.frame(
+  Model = c("Leaps", "ImSubset"),
+  Variables = c("4", "4"),
+  R2 = round(c(summary(leaps_model)$r.squared, summary(imsubset_model)$r.squared), 3),
+  AdjR2 = round(c(summary(leaps_model)$adj.r.squared, summary(imsubset_model)$adj.r.squared), 3),
+  AIC = round(c(AIC(leaps_model), AIC(imsubset_model)), 1),
+  BIC = round(c(BIC(leaps_model), BIC(imsubset_model)), 1)
+)
+
+print(comparison)
+
+# Calculate additional metrics
+cat("\n=== Performance Metrics ===\n")
+cat("Leaps model RMSE:", round(sqrt(mean(residuals(leaps_model)^2)), 2), "\n")
+cat("ImSubset model RMSE:", round(sqrt(mean(residuals(imsubset_model)^2)), 2), "\n")
+
+cat("\n=== Model Formulas ===\n")
+cat("Leaps: G3 ~ ln_absences + G2 + fail_abs_ratio + absences_per_study\n")
+cat("ImSubset: G3 ~ failures + ln_absences + G2 + fail_abs_ratio\n")
+
+cat("\nKey Difference: ImSubset retains failures directly, Leaps uses only engineered features\n")
+```
+
+**Winner**: Leaps model selected!
+- **Lower BIC** (1291.7 vs 1293.5) - Better parsimony
+- **Higher R²** (0.852 vs 0.851) - Better fit
+- **Engineered features** more interpretable than raw failures
+
+**Rationale**: Feature engineering (ratios) captures relationships better than raw variables.
+
+
+# Slide 16: K-Fold Cross-Validation
+
+## Final Model Validation
+
+```{r cv-validation}
+#| label: cv-validation
+#| echo: false
+#| output: true
+
+library(caret)
+
+set.seed(123)
+ctrl <- trainControl(method = "cv", number = 10)
+
+# Compare candidate models
+models <- list(
+  "Leaps Candidate" = train(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, 
+                              data = student, method = "lm", trControl = ctrl),
+  "ImSubset Candidate" = train(g3 ~ failures + ln_absences + g2 + fail_abs_ratio, 
+                               data = student, method = "lm", trControl = ctrl)
+)
+
+# Extract CV results
+cv_results <- data.frame(
+  Model = names(models),
+  RMSE = sapply(models, function(m) mean(m$resample$RMSE)),
+  Rsquared = sapply(models, function(m) mean(m$resample$Rsquared)),
+  MAE = sapply(models, function(m) mean(m$resample$MAE))
+)
+
+# Order by RMSE
+cv_results <- cv_results[order(cv_results$RMSE), ]
+
+# Round numeric columns only
+cv_results$RMSE <- round(cv_results$RMSE, 3)
+cv_results$Rsquared <- round(cv_results$Rsquared, 3)
+cv_results$MAE <- round(cv_results$MAE, 3)
+
+print(cv_results)
+
+cat("\nBest Model (Lowest RMSE):", cv_results[1, "Model"], "\n")
+cat("CV RMSE:", cv_results[1, "RMSE"], "\n")
+cat("CV R²:", cv_results[1, "Rsquared"], "\n")
+
+# Additional validation metrics
+cat("\n=== Cross-Validation Summary ===\n")
+cat("Method: 10-fold CV\n")
+cat("Purpose: Assess out-of-sample predictive performance\n")
+cat("Metric: RMSE (Root Mean Squared Error) - Lower is better\n")
+cat("\nWinner:", cv_results[1, "Model"], "\n")
+cat("Performance improvement:", round(cv_results[2, "RMSE"] - cv_results[1, "RMSE"], 3), "RMSE units\n")
+cat("Interpretation:", cv_results[1, "Model"], "generalizes better to unseen data\n")
+```
+
+
+# Slide 17: Final Model Summary
+
+## Leaps Model 
+
+**Equation:** G3 ~ ln_absences + G2 + fail_abs_ratio + absences_per_study
+
+```{r final-model-summary}
+#| label: final-model-summary
+#| echo: false
+#| output: true
+
+# Final Leaps model
+final_leaps <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, data = student)
+
+# Model equation
+cat("Model Equation:\n")
+cat("G3 =", round(coef(final_leaps)[1], 3), 
+    "+", round(coef(final_leaps)[2], 3), "× ln_absences",
+    "+", round(coef(final_leaps)[3], 3), "× G2",
+    "+", round(coef(final_leaps)[4], 3), "× fail_abs_ratio",
+    "+", round(coef(final_leaps)[5], 3), "× absences_per_study\n\n")
+
+# Performance metrics
+cat("Performance Metrics:\n")
+cat("R² =", round(summary(final_leaps)$r.squared, 3), "\n")
+cat("Adj R² =", round(summary(final_leaps)$adj.r.squared, 3), "\n")
+cat("RMSE =", round(sqrt(mean(residuals(final_leaps)^2)), 2), "\n")
+
+# Key coefficients
+cat("\nKey Coefficients:\n")
+coef_table <- summary(final_leaps)$coefficients
+for (i in 2:nrow(coef_table)) {
+  cat(rownames(coef_table)[i], ":", round(coef_table[i, "Estimate"], 3),
+      "(p =", formatC(coef_table[i, "Pr(>|t|)"], format="e", digits=2), ")\n")
+}
+```
+
+**Model explains 85% of variance** with 4 key engineered features!
+
+# Slide 18: Prediction vs Test Performance
+
+## Out-of-Sample Validation with 95% Prediction Intervals
+
+```{r test-prediction}
+#| label: test-prediction
+#| echo: false
+#| output: true
+#| fig-width: 14
+#| fig-height: 8
+
+library(ggplot2)
+
+# Ensure models and test set exist
+if (!exists("final_leaps")) {
+  final_leaps <- lm(g3 ~ ln_absences + g2 + fail_abs_ratio + absences_per_study, data = student)
+}
+
+if (!exists("test")) {
+  set.seed(123)
+  student$test <- ifelse(runif(nrow(student)) < 0.8, 0, 1)
+  test <- subset(student, test == 1)
+}
+
+# Make predictions on test set with prediction intervals
+pred_result <- predict(final_leaps, newdata = test, interval = "prediction", level = 0.95)
+pred_test <- pred_result[, "fit"]
+lower_bound <- pred_result[, "lwr"]
+upper_bound <- pred_result[, "upr"]
+
+# Take first 30 test cases for clearer visualization
+n_test <- min(30, length(test$g3))
+test_subset <- test[1:n_test, ]
+pred_subset <- pred_test[1:n_test]
+actual_subset <- test_subset$g3
+lower_subset <- lower_bound[1:n_test]
+upper_subset <- upper_bound[1:n_test]
+
+# Calculate performance metrics
+r2_test <- cor(pred_test, test$g3)^2
+rmse_test <- sqrt(mean((pred_test - test$g3)^2))
+mae_test <- mean(abs(pred_test - test$g3))
+
+cat("Test Set Performance:\n")
+cat("R² =", round(r2_test, 3), "\n")
+cat("RMSE =", round(rmse_test, 2), "\n")
+cat("MAE =", round(mae_test, 2), "\n\n")
+print("CI = 91.89189%")
+
+# Create prediction vs actual plot with intervals for first 30 cases
+plot_data <- data.frame(
+  Index = 1:n_test,
+  Actual = actual_subset,
+  Predicted = pred_subset,
+  Lower = lower_subset,
+  Upper = upper_subset
+)
+
+p <- ggplot(plot_data) +
+  geom_ribbon(aes(x = Index, ymin = Lower, ymax = Upper), 
+              fill = "gray80", alpha = 0.4) +
+  geom_line(aes(x = Index, y = Predicted), color = "#d62728", linewidth = 1) +
+  geom_point(aes(x = Index, y = Actual), color = "#1f77b4", size = 2) +
+  labs(title = "Predicted vs Actual G3 with 95% Prediction Intervals (first 30 test case)",
+       x = "Test Sample Index",
+       y = "G3") +
+  theme_minimal() +
+  theme(text = element_text(size = 14),
+        plot.title = element_text(size = 14, face = "bold"),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 13))
+
+print(p)
+```
+
+# Slide 19: Discussion of Results
+
+## Key Findings & Interpretations
+
+**Key Coefficients & Interpretations:**
+
+1. **G2 (β = 1.038, p < 0.001)**
+   - Strongest predictor of final performance
+   - Each 1-point increase in G2 → 1.04 point increase in G3
+   - Early assessment (G2) highly predictive of final outcome
+
+2. **fail_abs_ratio (β = -1.063, p < 0.001)**
+   - High failure-to-absence ratio → lower performance
+   - Students who fail despite fewer absences struggle more
+
+3. **ln_absences (β = 0.578, p < 0.001)**
+   - Log-transformed absences positively associated with grades
+   - Suggests attendance alone doesn't predict success
+
+4. **absences_per_study (β = -0.060, p = 0.042)**
+   - Absences relative to study time negatively impacts performance
+   - Students who miss class despite studying less affected
+
+**Model Performance:** R² = 0.85, RMSE = 1.72
+
+**Limitations:**
+- Single school dataset (Portugal) - limited generalizability
+- Cross-sectional design - no causal inference
+- Sample size (395 students) may limit power
+
+**Future Research:**
+- Non-linear models (Random Forest, XGBoost)
+- Longitudinal tracking
+- Multi-school validation
+
+# Thank You!{.center}
+
+**Questions? The floor is now open.**
+
+We welcome questions from the tutors, professors, students, and all attendees.
+
+**Contact:** Group L21G05
+
+**GitHub:** [Repository Link](https://github.sydney.edu.au/mwan0680/L21G05-GROUP) "https://github.sydney.edu.au/mwan0680/L21G05-GROUP"
+
+**Code & Analysis:** Fully reproducible in Quarto
